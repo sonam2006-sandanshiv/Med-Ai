@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Med-AI | Conversational Diagnostician</title>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Leaflet CSS for Map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="layout">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="logo"></div>
+                <h2>Med-AI</h2>
+            </div>
+            <nav class="nav-links">
+                <a href="#" class="nav-item active">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                    <span id="nav-auth">Voice Assistant</span>
+                </a>
+            </nav>
+            <div class="language-wrapper">
+                <label for="lang-select" id="lang-label">Language / भाषा:</label>
+                <select id="lang-select" class="lang-select">
+                    <option value="en" selected>English</option>
+                    <option value="mr">Marathi (मराठी)</option>
+                    <option value="hi">Hindi (हिंदी)</option>
+                </select>
+            </div>
+
+            <!-- Map Mini Section in Sidebar to keep UI clean -->
+            <div class="map-sidebar-section">
+                <h4 id="ui-map-title">Nearby Hospitals</h4>
+                <button id="find-hospitals-btn" class="btn-secondary" type="button"
+                    style="width:100%; justify-content:center; margin-top:8px;">Locate</button>
+
+                <!-- Hospital Search Bar -->
+                <div style="margin-top: 10px; position: relative;">
+                    <input type="text" id="hospital-search-input" placeholder="Search hospitals by name..."
+                        style="width: 100%; padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; font-size: 0.85rem; outline: none; transition: border-color 0.2s;"
+                        autocomplete="off">
+                </div>
+
+                <div class="map-container" id="map"
+                    style="height: 200px; width: 100%; border-radius: 8px; margin-top:12px; position:relative;">
+                    <div class="map-placeholder" id="map-placeholder"
+                        style="position: absolute; inset:0; display:flex; align-items:center; justify-content:center; background:#F8FAFC; color:#64748B; border:1px solid #E2E8F0; border-radius:8px; text-align:center; padding:10px; font-size:0.8rem;">
+                        <span id="ui-map-placeholder">Click to load map.</span>
+                    </div>
+                </div>
+
+                <!-- Hospital Details List -->
+                <div id="hospital-list-container"
+                    style="max-height: 50vh; overflow-y: auto; margin-top: 12px; display: none;">
+                    <div
+                        style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <h5 style="color: #334155; font-size: 0.85rem; margin: 0;" id="ui-hospital-list-title">
+                            Hospital Details:</h5>
+                    </div>
+                    <ul id="hospital-list"
+                        style="list-style: none; padding: 0; margin: 0; font-size: 0.8rem; display: flex; flex-direction: column; gap: 8px;">
+                        <!-- List items will be injected here -->
+                    </ul>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="content">
+            <header class="top-header">
+                <div class="breadcrumbs">
+                    <span id="bc-parent">Clinical Assessments</span> / <span class="current" id="bc-child">AI
+                        Consultation</span>
+                </div>
+                <div class="system-status">
+                    <span class="status-indicator online"></span>
+                    <span id="sys-secure">System Secure</span>
+                </div>
+            </header>
+
+            <div class="chat-wrapper">
+
+                <!-- Chat Window -->
+                <section class="chat-container card">
+                    <div class="chat-header">
+                        <div class="header-ai-info">
+                            <div class="ai-avatar">AI</div>
+                            <div>
+                                <h3 id="ui-title">Dr. Med-AI Assistant</h3>
+                                <p class="subtitle" id="ui-subtitle">Always here to listen and help.</p>
+                            </div>
+                        </div>
+                        <div class="audio-controls">
+                            <!-- Toggle for auto-tts -->
+                            <label
+                                style="display:flex; align-items:center; gap:8px; font-size:0.875rem; color:var(--text-muted); cursor:pointer;">
+                                <input type="checkbox" id="auto-tts-toggle" checked>
+                                <span id="ui-read-aloud">Auto Read Aloud</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="chat-history" id="chat-history">
+                        <!-- Messages will be dynamically injected here -->
+                    </div>
+
+                    <!-- Input Area -->
+                    <div class="chat-input-area">
+                        <div class="chat-input-group">
+                            <input type="text" id="chat-input" placeholder="Type or speak your message..."
+                                autocomplete="off">
+                            <button type="button" class="btn-icon voice-btn huge-mic" id="mic-btn"
+                                title="Click to Speak">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                    <line x1="12" y1="19" x2="12" y2="23"></line>
+                                    <line x1="8" y1="23" x2="16" y2="23"></line>
+                                </svg>
+                            </button>
+                            <button type="button" class="btn-primary" id="send-btn">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="listening-indicator hidden" id="listening-indicator">Listening... Speak now.</div>
+                    </div>
+                </section>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <script src="script.js"></script>
+</body>
+
+</html>
