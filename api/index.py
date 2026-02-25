@@ -15,7 +15,7 @@ app.add_middleware(
 )
 
 
-@app.post("/chat")
+@app.post("/api/chat")
 async def chat_interaction(
     symptoms: str = Form(..., description="The spoken or typed symptoms"),
     duration: str = Form("", description="The illness duration"),
@@ -23,13 +23,14 @@ async def chat_interaction(
 ):
     """
     Advanced chatbot endpoint that provides dynamic, contextual health guidance.
-    Avoids scripted responses by using Llama 3.2 or intelligent fallbacks.
+    Avoids scripted responses by using Groq Llama 3 for intelligent fallbacks.
     """
     
-    # Start with None - we'll get intelligent advice from Ollama or fallback
+    # Start with None - we'll get intelligent advice from Groq or fallback
     advice = None
+    import os
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
     
-    # Call Local Llama 3.2 1B (via Ollama API) for dynamic responses
     try:
         # Sophisticated system prompt that encourages natural, non-scripted responses
         system_prompt = """You are an empathetic medical assistant AI. Provide helpful health guidance based on reported symptoms.
@@ -46,39 +47,43 @@ Guidelines:
         if duration:
             user_context += f" (Duration: {duration})"
         
-        print(f"DEBUG: Attempting to connect to Ollama for prompt: {user_context}")
+        print(f"DEBUG: Attempting to connect to Groq API for prompt: {user_context}")
         
-        # Call Ollama for intelligent, dynamic response
+        # Call Groq API for intelligent, dynamic response using Llama 3 8B
         response = requests.post(
-            "http://localhost:11434/api/chat",
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
             json={
-                "model": "llama3.2:1b",
+                "model": "llama3-8b-8192",
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_context}
                 ],
-                "stream": False,
                 "temperature": 0.7  # Balance between consistency and creativity
             },
-            timeout=30 # Increased timeout since local LLMs can be slow
+            timeout=30 # Increased timeout since LLMs can be slow
         )
         
         if response.status_code == 200:
-            print("DEBUG: Successfully retrieved response from Ollama")
-            advice = response.json().get("message", {}).get("content", "").strip()
+            print("DEBUG: Successfully retrieved response from Groq")
+            data = response.json()
+            advice = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             # Verify we got meaningful content
             if not advice or len(advice) < 10:
-                print("DEBUG: Ollama response was too short or empty.")
+                print("DEBUG: Groq response was too short or empty.")
                 advice = None
         else:
-            print(f"DEBUG: Ollama returned non-200 status code: {response.status_code}. Response: {response.text}")
+            print(f"DEBUG: Groq returned non-200 status code: {response.status_code}. Response: {response.text}")
             
     except requests.exceptions.Timeout:
-        print("ERROR: Ollama request timed out after 30 seconds. Using fallback.")
+        print("ERROR: Groq request timed out after 30 seconds. Using fallback.")
     except requests.exceptions.ConnectionError:
-        print("ERROR: Cannot connect to Ollama. Is the Ollama service running? Using fallback.")
+        print("ERROR: Cannot connect to Groq. Using fallback.")
     except Exception as e:
-        print(f"ERROR: Ollama inference failed with unexpected error: {str(e)}")
+        print(f"ERROR: Groq inference failed with unexpected error: {str(e)}")
     
     # Intelligent contextual fallback when Ollama is unavailable
     if not advice:

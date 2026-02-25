@@ -201,13 +201,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
             botSpeak(dict[currentLang].analyzing);
 
-            // Call the actual FastAPI backend /chat endpoint
+            // Call the actual FastAPI backend /api/chat endpoint
             const formData = new FormData();
             formData.append("symptoms", contextSymptoms);
             formData.append("duration", contextDuration);
             formData.append("language", currentLang);
 
-            fetch("http://localhost:8000/chat", {
+            fetch("/api/chat", {
                 method: "POST",
                 body: formData
             })
