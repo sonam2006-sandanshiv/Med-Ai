@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+google-generativeai
+deep-translator
+python-multipart

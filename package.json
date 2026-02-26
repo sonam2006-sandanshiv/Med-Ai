@@ -1,0 +1,10 @@
+{
+    "name": "med-ai",
+    "version": "1.0.0",
+    "description": "Medical AI Assistant",
+    "main": "index.html",
+    "scripts": {
+        "start": "npx serve ."
+    },
+    "dependencies": {}
+}
