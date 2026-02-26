@@ -13,13 +13,7 @@ const dict = {
         mapSearching: "Locating you...",
         mapFound: "Found Hospitals",
         inputPlaceholder: "Type or speak your message...",
-        listenIndicator: "Listening... Please speak now.",
-
-        // Conversational AI Scripts
-        greet: "Hello, I am Med AI. What symptoms are you experiencing today?",
-        askDuration: "I understand. And how many days or weeks have you been experiencing this?",
-        analyzing: "Thank you. Let me analyze your symptoms...",
-        fallbackAdvice: "Based on your symptoms, I recommend resting and drinking plenty of fluids. However, please consult a real doctor for an accurate diagnosis."
+        listenIndicator: "Listening... Please speak now."
     },
     mr: {
         navAuth: "आवाज सहाय्यक",
@@ -35,13 +29,7 @@ const dict = {
         mapSearching: "तुमचे स्थान शोधत आहे...",
         mapFound: "रुग्णालये सापडली",
         inputPlaceholder: "टाइप करा किंवा बोला...",
-        listenIndicator: "ऐकत आहे... कृपया आता बोला.",
-
-        // Conversational AI Scripts
-        greet: "नमस्कार, मी मेड एआय आहे. आज तुम्हाला काय त्रास होत आहे?",
-        askDuration: "मला समजले. आणि तुम्हाला हा त्रास किती दिवस किंवा आठवड्यांपासून होत आहे?",
-        analyzing: "धन्यवाद. मला तुमच्या लक्षणांचे विश्लेषण करू द्या...",
-        fallbackAdvice: "तुमच्या लक्षणांवर आधारित, मी विश्रांती घेण्याची आणि भरपूर द्रव पिण्याची शिफारस करतो. तथापि, अचूक निदानासाठी कृपया वास्तविक डॉक्टरांचा सल्ला घ्या."
+        listenIndicator: "ऐकत आहे... कृपया आता बोला."
     },
     hi: {
         navAuth: "आवाज़ सहायक",
@@ -57,23 +45,17 @@ const dict = {
         mapSearching: "आपका स्थान ढूंढा जा रहा है...",
         mapFound: "अस्पताल मिले",
         inputPlaceholder: "टाइप करें या बोलें...",
-        listenIndicator: "सुन रहा हूँ... कृपया बोलें।",
-
-        // Conversational AI Scripts
-        greet: "नमस्ते, मैं मेड एआई हूं। आज आपको क्या परेशानी हो रही है?",
-        askDuration: "मैं समझता हूँ। और यह समस्या आपको कितने दिनों या हफ्तों से है?",
-        analyzing: "धन्यवाद। मुझे आपके लक्षणों का विश्लेषण करने दें...",
-        fallbackAdvice: "आपके लक्षणों के आधार पर, मैं आराम करने और खूब तरल पदार्थ पीने की सलाह देता हूं। हालाँकि, कृपया सटीक निदान के लिए एक वास्तविक डॉक्टर से परामर्श लें।"
+        listenIndicator: "सुन रहा हूँ... कृपया बोलें।"
     }
 };
 
 let currentLang = 'en';
 let mapInstance = null;
+let mapInstanceLat = null;
+let mapInstanceLng = null;
 
-// Chat States: START -> WAIT_SYMPTOMS -> WAIT_DURATION -> DONE
-let chatState = 'START';
-let contextSymptoms = '';
-let contextDuration = '';
+// The AI is now purely dynamic. We just track if we are waiting for a backend response or not.
+let chatState = 'IDLE';
 
 document.addEventListener("DOMContentLoaded", () => {
 
@@ -81,7 +63,6 @@ document.addEventListener("DOMContentLoaded", () => {
     langSelect.addEventListener("change", (e) => {
         currentLang = e.target.value;
         updateUITranslations();
-        // Reset chat on language change
         resetChat();
     });
 
@@ -98,11 +79,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const indicator = document.getElementById("listening-indicator");
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition;
-    let isMicActive = false; // Flag to prevent rapid restart loops
+    let isMicActive = false;
 
     if (SpeechRecognition) {
         recognition = new SpeechRecognition();
-        // Keep continuous false but do not spam restart to avoid the permission loops
         recognition.continuous = false;
         recognition.interimResults = false;
 
@@ -116,7 +96,6 @@ document.addEventListener("DOMContentLoaded", () => {
             const transcript = event.results[event.results.length - 1][0].transcript;
             chatInput.value = transcript;
 
-            // Auto submit when they finish speaking
             setTimeout(() => {
                 handleUserSubmit(chatInput.value);
             }, 800);
@@ -124,7 +103,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
         recognition.onerror = function (event) {
             console.error("Speech recognition error", event.error);
-            // Don't kill the mic on simple no-speech errors, but hide visual indicators if fatal
             if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
                 indicator.classList.add("hidden");
                 micBtn.classList.remove("recording");
@@ -142,7 +120,6 @@ document.addEventListener("DOMContentLoaded", () => {
         console.warn("Speech Recognition API not supported.");
     }
 
-    // Toggle Mic Manually
     micBtn.addEventListener("click", () => {
         if (!recognition) return;
         if (isMicActive) {
@@ -153,7 +130,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     function startListening() {
-        if (!recognition || isMicActive) return;
+        if (!recognition || isMicActive || chatState === 'WAITING_FOR_BOT') return;
         let srLang = 'en-US';
         if (currentLang === 'hi') srLang = 'hi-IN';
         if (currentLang === 'mr') srLang = 'mr-IN';
@@ -162,70 +139,59 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // --- Core Chat Logic ---
+    let conversationHistory = [];
+
     function resetChat() {
         document.getElementById("chat-history").innerHTML = '';
-        chatState = 'START';
-        contextSymptoms = '';
-        contextDuration = '';
+        chatState = 'WAITING_FOR_BOT';
+        conversationHistory = [];
 
-        // Stop dictating if switching languages mid-speech
         if ('speechSynthesis' in window) window.speechSynthesis.cancel();
         if (recognition && isMicActive) recognition.stop();
 
-        chatState = 'WAIT_SYMPTOMS';
-        setTimeout(() => botSpeak(dict[currentLang].greet), 500);
+        chatState = 'IDLE';
+
+        let greeting = "Hello! 👋 I am Med-AI. What symptoms are you experiencing today?";
+        if (currentLang === 'hi') greeting = "नमस्ते! 👋 मैं मेड-एआई हूं। आज आपको क्या लक्षण महसूस हो रहे हैं?";
+        if (currentLang === 'mr') greeting = "नमस्कार! 👋 मी मेड-एआय आहे. आज तुम्हाला कोणती लक्षणे जाणवत आहेत?";
+
+        botSpeak(greeting);
+        conversationHistory.push({ role: 'model', content: greeting });
     }
 
     function handleUserSubmit(text) {
         text = text.trim();
-        if (!text) return;
+        if (!text || chatState === 'WAITING_FOR_BOT') return;
 
-        // Add User message
         appendMessage(text, 'user');
+        conversationHistory.push({ role: 'user', content: text });
         chatInput.value = '';
+        chatState = 'WAITING_FOR_BOT';
 
-        // Process State based on where we are
-        if (chatState === 'WAIT_SYMPTOMS') {
-            contextSymptoms = text;
-            chatState = 'WAIT_DURATION';
-            setTimeout(() => botSpeak(dict[currentLang].askDuration), 800);
-
-        } else if (chatState === 'WAIT_DURATION') {
-            contextDuration = text;
-            chatState = 'DONE';
-
-            // Stop mic since conversation flow is finished
-            if (recognition && isMicActive) {
-                recognition.stop();
-            }
-
-            botSpeak(dict[currentLang].analyzing);
-
-            // Call the actual FastAPI backend /api/chat endpoint
-            const formData = new FormData();
-            formData.append("symptoms", contextSymptoms);
-            formData.append("duration", contextDuration);
-            formData.append("language", currentLang);
-
-            fetch("/api/chat", {
-                method: "POST",
-                body: formData
-            })
-                .then(response => response.json())
-                .then(data => {
-                    // Read the successfully translated response out loud
-                    botSpeak(data.reply_translated);
-                })
-                .catch(error => {
-                    console.error("Backend Chat Error:", error);
-                    botSpeak(dict[currentLang].fallbackAdvice);
-                });
-
-        } else if (chatState === 'DONE') {
-            // If they keep talking after it's done, just acknowledge them instead of repeating the fallback loop
-            botSpeak("Your analysis is complete above. To ask something else, please change the language or refresh the window.");
-            if (recognition && isMicActive) recognition.stop();
+        if (recognition && isMicActive) {
+            recognition.stop();
         }
+
+        const formData = new FormData();
+        formData.append("symptoms", text);
+        formData.append("duration", "");
+        formData.append("language", currentLang);
+        formData.append("history", JSON.stringify(conversationHistory));
+
+        fetch("/api/chat", {
+            method: "POST",
+            body: formData
+        })
+            .then(response => response.json())
+            .then(data => {
+                chatState = 'IDLE';
+                botSpeak(data.reply_translated);
+                conversationHistory.push({ role: 'model', content: data.reply_translated });
+            })
+            .catch(error => {
+                chatState = 'IDLE';
+                console.error("Backend Error:", error);
+            });
     }
 
     function botSpeak(text) {
@@ -239,8 +205,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 const msg = new SpeechSynthesisUtterance(text);
 
                 let voiceLang = 'en-US';
-                if (currentLang === 'hi') voiceLang = 'hi-IN';
-                if (currentLang === 'mr') voiceLang = 'mr-IN';
+                let langName = 'english';
+                if (currentLang === 'hi') { voiceLang = 'hi-IN'; langName = 'hindi'; }
+                if (currentLang === 'mr') { voiceLang = 'mr-IN'; langName = 'marathi'; }
 
                 msg.lang = voiceLang;
                 msg.rate = 1.0;
@@ -248,16 +215,28 @@ document.addEventListener("DOMContentLoaded", () => {
                 let preferredVoice = null;
                 const voices = window.speechSynthesis.getVoices();
 
-                // 1. First try to find a high-quality Google native voice
+                // 1. Google Native Voices usually sound best
                 const googleVoice = voices.find(v => v.name.includes("Google") && v.lang.replace('_', '-').toLowerCase().includes(voiceLang.split('-')[0]));
 
-                // 2. Fallback to any voice that matches the language code (e.g. 'hi' or 'mr')
-                const anyMatchingVoice = voices.find(v => v.lang.replace('_', '-').toLowerCase().includes(voiceLang.split('-')[0]));
+                // 2. Matching voice by language code (e.g. 'hi' or 'mr')
+                const codeVoice = voices.find(v => v.lang.replace('_', '-').toLowerCase().includes(voiceLang.split('-')[0]));
+
+                // 3. Matching voice by literal name (e.g. "Microsoft Hemant - Hindi")
+                const nameVoice = voices.find(v => v.name.toLowerCase().includes(langName));
+
+                // 4. Last resort default voice
+                const defaultVoice = voices.find(v => v.default) || voices[0];
 
                 if (googleVoice) {
                     preferredVoice = googleVoice;
-                } else if (anyMatchingVoice) {
-                    preferredVoice = anyMatchingVoice;
+                } else if (codeVoice) {
+                    preferredVoice = codeVoice;
+                } else if (nameVoice) {
+                    preferredVoice = nameVoice;
+                } else {
+                    // Critical fallback: If NO native voices exist on the user's OS, 
+                    // we must force the default English voice or it will stay permanently mute.
+                    preferredVoice = defaultVoice;
                 }
 
                 if (preferredVoice) {
@@ -267,11 +246,16 @@ document.addEventListener("DOMContentLoaded", () => {
                     console.warn(`TTS: No specific voice found for ${voiceLang}. Falling back to default browser voice.`);
                 }
 
+                // Strip HTML tags (like <b>) from the text so the voice synthesis doesn't read the tags aloud
+                const tempDiv = document.createElement("div");
+                tempDiv.innerHTML = text;
+                msg.text = tempDiv.textContent || tempDiv.innerText || "";
+
                 let hasFiredEnd = false;
                 msg.onend = function () {
                     if (hasFiredEnd) return;
                     hasFiredEnd = true;
-                    if (chatState === 'WAIT_SYMPTOMS' || chatState === 'WAIT_DURATION') {
+                    if (chatState === 'IDLE') {
                         startListening();
                     }
                 };
@@ -280,7 +264,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     if (window.speechSynthesis.speaking) return;
                     if (hasFiredEnd) return;
                     hasFiredEnd = true;
-                    if (chatState === 'WAIT_SYMPTOMS' || chatState === 'WAIT_DURATION') {
+                    if (chatState === 'IDLE') {
                         startListening();
                     }
                 }, text.length * 90 + 2000);
@@ -387,9 +371,15 @@ document.addEventListener("DOMContentLoaded", () => {
             );
             out center;
         `;
-        const overpassUrl = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(overpassQuery)}`;
+        const overpassUrl = `https://overpass-api.de/api/interpreter`;
 
-        fetch(overpassUrl)
+        fetch(overpassUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: "data=" + encodeURIComponent(overpassQuery)
+        })
             .then(res => res.json())
             .then(data => {
                 listElement.innerHTML = ''; // Clear loading text
@@ -423,11 +413,22 @@ document.addEventListener("DOMContentLoaded", () => {
                         let rating = tags.rating ? parseFloat(tags.rating) : (3.5 + Math.random() * 1.5);
                         rating = parseFloat(rating.toFixed(1));
 
-                        extractedHospitals.push({ name, address, phone, eLat, eLng, rating });
+                        // Calculate Distance
+                        const R = 6371;
+                        const dLat = (eLat - lat) * Math.PI / 180;
+                        const dLon = (eLng - lng) * Math.PI / 180;
+                        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat * Math.PI / 180) * Math.cos(eLat * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                        const distance = R * c;
+
+                        extractedHospitals.push({ name, address, phone, eLat, eLng, rating, distance });
                     });
 
-                    // Sort by rating (highest first)
-                    extractedHospitals.sort((a, b) => b.rating - a.rating);
+                    // Sort by distance (closest first), then rating
+                    extractedHospitals.sort((a, b) => {
+                        if (Math.abs(a.distance - b.distance) < 0.5) return b.rating - a.rating;
+                        return a.distance - b.distance;
+                    });
 
                     renderHospitalList(extractedHospitals);
 
@@ -500,7 +501,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
             li.innerHTML = `
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;">
-                    <strong style="color: #0F172A; font-size: 0.9rem;">${h.name}</strong>
+                    <div style="display: flex; flex-direction: column; gap: 2px;">
+                        <strong style="color: #0F172A; font-size: 0.9rem;">${h.name}</strong>
+                        <span style="font-size: 0.7rem; color: #10B981; font-weight: 500;">📍 ${h.distance.toFixed(1)} km away</span>
+                    </div>
                     <div style="display: flex; align-items: center; gap: 4px; font-size: 0.75rem; color: #64748B;">
                         <div style="font-size: 0.9rem; line-height: 1;">${starsHtml}</div>
                         <span>${h.rating}</span>
@@ -524,7 +528,6 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    // Start chat automatically on load
     updateUITranslations();
-    setTimeout(resetChat, 500); // 500ms delay to let UI render before speaking
+    setTimeout(resetChat, 500);
 });

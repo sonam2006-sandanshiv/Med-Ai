@@ -1,8 +1,11 @@
 from fastapi import FastAPI, Form
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.staticfiles import StaticFiles
+from starlette.responses import FileResponse
 from deep_translator import GoogleTranslator
-import requests
+import google.generativeai as genai
 import uvicorn
+import os
 
 app = FastAPI(title="Med-AI Chatbot Assistant API")
 
@@ -14,105 +17,127 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import json
+
+# Keep the API endpoint
 
 @app.post("/api/chat")
 async def chat_interaction(
     symptoms: str = Form(..., description="The spoken or typed symptoms"),
     duration: str = Form("", description="The illness duration"),
-    language: str = Form("en", description="Target language code (e.g. 'en', 'mr', 'hi')")
+    language: str = Form("en", description="Target language code (e.g. 'en', 'mr', 'hi')"),
+    history: str = Form("[]", description="JSON array of previous conversation turns")
 ):
     """
     Advanced chatbot endpoint that provides dynamic, contextual health guidance.
-    Avoids scripted responses by using Groq Llama 3 for intelligent fallbacks.
+    Uses Gemini natively for multilingual, multi-turn conversations.
     """
     
-    # Start with None - we'll get intelligent advice from Groq or fallback
     advice = None
-    import os
-    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
     
     try:
-        # Sophisticated system prompt that encourages natural, non-scripted responses
-        system_prompt = """You are an empathetic medical assistant AI. Provide helpful health guidance based on reported symptoms.
+        # Parse history
+        try:
+            conversation_history = json.loads(history)
+        except json.JSONDecodeError:
+            conversation_history = []
+
+        # Load the medical knowledge base if it exists
+        knowledge_base_text = ""
+        kb_path = os.path.join(os.path.dirname(__file__), "medical_knowledge_base.txt")
+        try:
+            with open(kb_path, "r", encoding="utf-8") as f:
+                knowledge_base_text = f.read()
+            print(f"DEBUG: Loaded Medical Knowledge Base ({len(knowledge_base_text)} chars)")
+        except Exception as e:
+            print(f"DEBUG: Could not load knowledge base: {e}")
+
+        # Map the language code to a full name to enforce heavy context weighting on Gemini's translation
+        lang_map = {
+            "en": "English",
+            "mr": "Marathi (मराठी) - Use Devanagari script natively",
+            "hi": "Hindi (हिंदी) - Use Devanagari script natively"
+        }
+        full_language = lang_map.get(language, language)
+
+        # Initialize Gemini API
+        genai.configure(api_key="REDACTED_KEY")
+        
+        # We use a sophisticated system prompt via the instructions parameter for the Gemini model
+        system_instruction = f"""You are a highly empathetic and professional medical assistant AI named Med-AI.
+Your goal is to politely understand the patient's symptoms and organically offer guidance.
+CRITICAL: You MUST respond natively and fluently ONLY in this exact language: '{full_language}'. Your entire response must be in this language. Do NOT use English unless English is requested.
+
+MED-AI CLINICAL KNOWLEDGE BASE:
+{knowledge_base_text}
+
 Guidelines:
-- Be conversational and natural, not robotic or scripted
-- Provide specific, contextual advice (not generic templates)
-- Consider symptom severity and duration when mentioned
-- Always recommend professional medical evaluation
-- Be honest about limitations of remote assessment
-- Avoid repeating the same phrases or patterns
-- Keep responses concise (2-3 sentences max)"""
-        
-        user_context = f"Patient reports: {symptoms}"
-        if duration:
-            user_context += f" (Duration: {duration})"
-        
-        print(f"DEBUG: Attempting to connect to Groq API for prompt: {user_context}")
-        
-        # Call Groq API for intelligent, dynamic response using Llama 3 8B
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "llama3-8b-8192",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_context}
-                ],
-                "temperature": 0.7  # Balance between consistency and creativity
-            },
-            timeout=30 # Increased timeout since LLMs can be slow
+- Start your response very politely (e.g., using emojis like 👋, 🙏).
+- If the user just says hello without symptoms, kindly ask them what symptoms they are experiencing.
+- BE HUMAN AND CONVERSATIONAL. Ask only ONE clarifying question at a time if you need more info to make a diagnosis from the knowledge base. Wait for their reply.
+- KEEP ANSWERS VERY SHORT AND CONCISE (1-3 sentences maximum).
+- STRICTLY use the provided MED-AI CLINICAL KNOWLEDGE BASE to match their symptoms to a disease.
+- If their symptoms closely match a disease in the database, tell them the suspected disease, provide its exact description, and list out the exact recommended precautions/treatments from the database.
+- IMPORTANT HIGHLIGHTING: If you list Precautions or Treatments, you MUST wrap that section in HTML bold tags `<b>` so it stands out visually. (e.g., <b>Precautions:</b> ...)
+- Use em-dashes (—) for natural pacing and pauses.
+- Always recommend professional medical evaluation if needed.
+- Do NOT provide generic advice if a match is found in the knowledge base."""
+
+        model = genai.GenerativeModel(
+            model_name="gemini-2.5-flash", 
+            system_instruction=system_instruction
         )
         
-        if response.status_code == 200:
-            print("DEBUG: Successfully retrieved response from Groq")
-            data = response.json()
-            advice = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-            # Verify we got meaningful content
-            if not advice or len(advice) < 10:
-                print("DEBUG: Groq response was too short or empty.")
-                advice = None
-        else:
-            print(f"DEBUG: Groq returned non-200 status code: {response.status_code}. Response: {response.text}")
-            
-    except requests.exceptions.Timeout:
-        print("ERROR: Groq request timed out after 30 seconds. Using fallback.")
-    except requests.exceptions.ConnectionError:
-        print("ERROR: Cannot connect to Groq. Using fallback.")
-    except Exception as e:
-        print(f"ERROR: Groq inference failed with unexpected error: {str(e)}")
-    
-    # Intelligent contextual fallback when Ollama is unavailable
-    if not advice:
-        symptoms_lower = symptoms.lower()
+        # Reconstruct chat session memory
+        chat = model.start_chat()
         
-        # Context-aware responses that vary based on specific symptoms
-        if any(word in symptoms_lower for word in ['fever', 'temperature', 'hot']):
-            advice = "I see you have a fever. Monitor your temperature regularly and stay hydrated. If it persists beyond 3-4 days or exceeds 103°F (39.4°C), seek medical attention promptly."
-        elif any(word in symptoms_lower for word in ['cough', 'throat', 'sore']):
-            advice = "Coughing and sore throat can have various causes. Rest your voice, stay hydrated, and try throat lozenges. If it's accompanied by difficulty breathing or lasts over 2 weeks, see a doctor."
-        elif any(word in symptoms_lower for word in ['headache', 'migraine', 'head pain']):
-            advice = "Headaches can stem from dehydration, stress, or other causes. Try rest, hydration, and over-the-counter pain relief if appropriate. Recurring or severe headaches warrant a medical evaluation."
-        elif any(word in symptoms_lower for word in ['fatigue', 'tired', 'exhausted']):
-            advice = "Fatigue can indicate various conditions from lack of sleep to nutritional deficiencies. Ensure adequate rest, balanced nutrition, and hydration. Persistent fatigue warrants a medical evaluation."
-        elif any(word in symptoms_lower for word in ['nausea', 'vomiting', 'stomach']):
-            advice = "Nausea and digestive issues may be related to diet, stress, or infection. Rest your digestive system, stay hydrated with clear fluids, and eat bland foods. Contact a doctor if symptoms worsen."
-        else:
-            advice = f"I understand you're experiencing {symptoms}. This requires proper medical evaluation to determine the cause. Monitor your condition and consult a healthcare provider if symptoms persist or worsen."
+        # Inject previous history turns into the Gemini chat session
+        for turn in conversation_history:
+            role = "user" if turn.get('role') == 'user' else "model"
+            content = turn.get('content', '')
+            if content:
+                 chat.history.append({"role": role, "parts": [content]})
+                 
+        user_context = symptoms
+        if duration:
+            user_context += f" (Condition duration: {duration})"
+            
+        print(f"DEBUG: Calling Gemini API for: {user_context}")
+        
+        # Generate the response with automatic retries for Rate Limits
+        import time
+        max_retries = 3
+        retry_delay = 22 # Wait 22 seconds between retries to clear the 15 RPM limit bucket
+        
+        for attempt in range(max_retries):
+            try:
+                response = chat.send_message(
+                    user_context,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.7,
+                    )
+                )
+                advice = response.text.strip()
+                print(f"DEBUG: Successfully retrieved response from Gemini (Attempt {attempt + 1}).")
+                break # Break out of loop on success
+            except Exception as e:
+                error_msg = str(e)
+                if "429" in error_msg or "Quota" in error_msg:
+                    if attempt < max_retries - 1:
+                        print(f"WARNING: Gemini rate limit hit. Waiting {retry_delay}s to retry... (Attempt {attempt + 1}/{max_retries})")
+                        time.sleep(retry_delay)
+                        continue # Loop again
+                # If we exhausted retries or it was a different error, raise it to the outer try/except
+                raise e
+            
+    except Exception as e:
+        print(f"ERROR: Gemini inference failed with unexpected error: {str(e)}")
+        
+        # Fallback if the API fails entirely
+        advice = "I apologize, but I am having trouble connecting to my medical database right now. 🙏 Please consult a real doctor for an accurate diagnosis."
     
-    # Multilingual translation
-    if language and language.lower() not in ["en", "english"]:
-        try:
-            translator = GoogleTranslator(source='auto', target=language)
-            final_advice = translator.translate(advice)
-        except Exception as e:
-            print(f"Translation failed: {e}")
-            final_advice = advice + " (Translation unavailable)"
-    else:
-        final_advice = advice
+    # We now trust Gemini to do the native translation! No deep_translator needed.
+    final_advice = advice
     
     return {
         "reply": advice,
@@ -120,5 +145,16 @@ Guidelines:
     }
 
 
+# Mount the root directory to serve static files (like styles.css and script.js)
+app.mount("/static", StaticFiles(directory="."), name="static")
+
+@app.get("/")
+async def serve_index():
+    return FileResponse("index.html")
+
+@app.get("/{filename}")
+async def serve_file(filename: str):
+    return FileResponse(filename)
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000)
